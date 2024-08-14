@@ -277,6 +277,9 @@ void sfree(void* p) {
     }
 
     auto* block = (MallocMetadata*)((char*)p - sizeof(MallocMetadata));
+    if (block->get_is_free()) {
+        return; // Block is already free, do nothing
+    }
     if (block->get_is_mmap()) {
         // Remove from mmap list
         if (mmap_head == block) {
