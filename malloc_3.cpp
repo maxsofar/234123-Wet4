@@ -142,12 +142,12 @@ MallocMetadata* findFreeBlock(size_t size) {
 }
 
 void* smalloc(size_t size) {
-    if (size == 0 || size > 100000000) {
-        return nullptr;
-    }
-
     if (!is_memory_pool_initialized) {
         initialize_memory_pool();
+    }
+
+    if (size == 0 || size > 100000000) {
+        return nullptr;
     }
 
     if (size >= 128 * 1024) {
