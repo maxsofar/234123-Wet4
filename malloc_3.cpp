@@ -237,7 +237,7 @@ void addBlockToFreeList(MallocMetadata* block, int order) {
 }
 
 // Helper function to merge buddy blocks and return the merged block
-MallocMetadata* tryMergeBuddyBlocks(MallocMetadata* block, size_t size, int& order, size_t& total_size) {
+MallocMetadata* tryMergeBuddyBlocks(MallocMetadata* block, size_t size, int& order, size_t& total_size, bool stop_at_desired_size = false) {
     while (order < MAX_ORDER) {
         void* buddy_address = findBuddy((void*)block, MIN_BLOCK_SIZE << order);
         auto* buddy = (MallocMetadata*)buddy_address;
@@ -260,6 +260,11 @@ MallocMetadata* tryMergeBuddyBlocks(MallocMetadata* block, size_t size, int& ord
             order++;
             // Update stats for each merge
             stats.num_free_blocks--;
+
+            // Stop merging if the desired size is reached
+            if (stop_at_desired_size && total_size >= size) {
+                break;
+            }
         } else {
             break;
         }
@@ -317,6 +322,31 @@ void sfree(void* p) {
 
 //--------------------------------- srealloc ---------------------------------
 
+bool canAchieveBestFitBlockSizeByMerging(MallocMetadata* block, size_t target_size) {
+    size_t total_size = block->get_size();
+    int order = getOrder(total_size);
+    int best_fit_order = getOrder(target_size);
+
+    while (order < best_fit_order) {
+        void* buddy_address = findBuddy((void*)block, MIN_BLOCK_SIZE << order);
+        auto* buddy = (MallocMetadata*)buddy_address;
+
+        if (buddy->get_is_free() && buddy->get_size() == static_cast<size_t>(MIN_BLOCK_SIZE << order)) {
+            total_size += buddy->get_size();
+            if (buddy < block) {
+                block = buddy;
+            }
+            order++;
+        } else {
+            break;
+        }
+
+        if (total_size >= static_cast<size_t>(MIN_BLOCK_SIZE << best_fit_order)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Handle mmaped blocks
 void* handle_mmaped_block(MallocMetadata* curr, void* oldp, size_t size) {
@@ -363,27 +393,18 @@ void* srealloc(void* oldp, size_t size) {
     }
 
     // Check if merging with buddy blocks can provide a large enough block
-    size_t total_size = curr->get_size();
-    MallocMetadata* block = curr;
-    int order = getOrder(curr->get_size());
+    if (canAchieveBestFitBlockSizeByMerging(curr, size)) {
+        size_t original_size = curr->get_size();
+        size_t total_size = original_size;
+        int order = getOrder(original_size);
+        MallocMetadata* merged_block = tryMergeBuddyBlocks(curr, size, order, total_size, true);
+        merged_block->set_is_free(false);
+        merged_block->set_size(total_size);
 
-    while (order < MAX_ORDER) {
-        void* buddy_address = findBuddy((void*)block, MIN_BLOCK_SIZE << order);
-        auto* buddy = (MallocMetadata*)buddy_address;
+        // Update stats
+        stats.num_free_bytes -= (total_size - original_size);
 
-        if (buddy->get_is_free() && buddy->get_size() == static_cast<size_t>(MIN_BLOCK_SIZE << order)) {
-            total_size += buddy->get_size();
-            if (buddy < block) {
-                block = buddy;
-            }
-            order++;
-            if (total_size >= size) {
-                mergeBuddyBlocks(block, order);
-                return (char*)block + sizeof(MallocMetadata);
-            }
-        } else {
-            break;
-        }
+        return (void*)((char*)merged_block + sizeof(MallocMetadata));
     }
 
     // Find a different block that is large enough
@@ -396,7 +417,7 @@ void* srealloc(void* oldp, size_t size) {
     sfree(oldp);
 
     // Update stats
-    stats.num_used_blocks++;
+//    stats.num_used_blocks++;
 
     return new_ptr;
 }
