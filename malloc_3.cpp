@@ -31,6 +31,8 @@ struct MallocMetadata {
     MallocMetadata* get_next() const { return next; }
     void set_next(MallocMetadata* next) { this->next = next; }
     void set_prev(MallocMetadata* prev) { this->prev = prev; }
+    MallocMetadata* get_prev() const { return prev; }
+
 };
 struct Stats {
     size_t num_free_blocks = 0;
@@ -88,7 +90,7 @@ int getOrder(size_t size) {
     return (order > MAX_ORDER) ? -1 : order;
 }
 
-// Helper function to remove a block from the free list
+// Helper function to remove the first block from the free list of a given order
 MallocMetadata* removeBlockFromFreeList(int order) {
     MallocMetadata* block = free_lists[order];
     if (block != nullptr) {
@@ -239,31 +241,34 @@ MallocMetadata* tryMergeBuddyBlocks(MallocMetadata* block, size_t size, int& ord
         auto* buddy = (MallocMetadata*)buddy_address;
 
         if (buddy->get_is_free() && buddy->get_size() == static_cast<size_t>(MIN_BLOCK_SIZE << order)) {
+            // Remove buddy from free list
+            if (buddy->get_prev() != nullptr) {
+                buddy->get_prev()->set_next(buddy->get_next());
+            } else {
+                free_lists[order] = buddy->get_next();
+            }
+            if (buddy->get_next() != nullptr) {
+                buddy->get_next()->set_prev(buddy->get_prev());
+            }
+
             total_size += buddy->get_size();
             if (buddy < block) {
                 block = buddy;
             }
             order++;
-            if (total_size >= size) {
-                return block;
-            }
+            // Update stats for each merge
+            stats.num_free_blocks--;
         } else {
             break;
         }
     }
-    return nullptr;
+    return block;
 }
 
 void mergeBuddyBlocks(MallocMetadata* block, int order) {
     size_t total_size = block->get_size();
     MallocMetadata* merged_block = tryMergeBuddyBlocks(block, total_size, order, total_size);
-    if (merged_block != nullptr) {
-        block = merged_block;
-        // Update stats for each merge
-        stats.num_free_blocks--;
-        stats.num_free_bytes -= block->get_size();
-    }
-    addBlockToFreeList(block, order);
+    addBlockToFreeList(merged_block, order);
 }
 
 void sfree(void* p) {
@@ -294,13 +299,15 @@ void sfree(void* p) {
     }
 
     block->set_is_free(true);
-    int order = getOrder(block->get_size());
-    mergeBuddyBlocks(block, order);
-
     // Update stats
     stats.num_free_blocks++;
     stats.num_free_bytes += block->get_size();
     stats.num_used_blocks--;
+
+    int order = getOrder(block->get_size());
+    mergeBuddyBlocks(block, order);
+
+
 }
 
 //--------------------------------- srealloc ---------------------------------
