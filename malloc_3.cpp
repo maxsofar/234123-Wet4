@@ -146,6 +146,10 @@ void* smalloc(size_t size) {
         return nullptr;
     }
 
+    if (!is_memory_pool_initialized) {
+        initialize_memory_pool();
+    }
+
     if (size >= 128 * 1024) {
         // Use mmap for large allocations
         void* ptr = mmap(nullptr, size + sizeof(MallocMetadata), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -165,9 +169,7 @@ void* smalloc(size_t size) {
         return (void*)((char*)ptr + sizeof(MallocMetadata));
     }
 
-    if (!is_memory_pool_initialized) {
-        initialize_memory_pool();
-    }
+
 
     MallocMetadata* block = findFreeBlock(size);
     if (block == nullptr) {
