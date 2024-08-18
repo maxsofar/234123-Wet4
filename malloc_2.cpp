@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <cstring>
 
+#define MAX_ALLOC_SIZE 100000000
+#define GET_METADATA_PTR(p) ((MallocMetadata*)((char*)(p) - sizeof(MallocMetadata)))
 
 struct MallocMetadata {
     size_t size;
@@ -66,7 +68,7 @@ MallocMetadata* findFreeBlock(size_t size) {
 
 void* smalloc(size_t size)
 {
-    if (size == 0 || size > 100000000) {
+    if (size == 0 || size > MAX_ALLOC_SIZE) {
         return nullptr;
     }
 
@@ -115,7 +117,7 @@ void* smalloc(size_t size)
 
 void* scalloc(size_t num, size_t size)
 {
-    if (num == 0 || size == 0 || num * size > 100000000) {
+    if (num == 0 || size == 0 || num * size > MAX_ALLOC_SIZE) {
         return nullptr;
     }
 
@@ -169,7 +171,7 @@ void sfree(void* p)
 
 void* srealloc(void* oldp, size_t size)
 {
-    if (size == 0 || size > 100000000) {
+    if (size == 0 || size > MAX_ALLOC_SIZE) {
         return nullptr;
     }
 

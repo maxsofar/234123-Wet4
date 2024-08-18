@@ -63,11 +63,26 @@ void initialize_memory_pool() {
         auto* block = (MallocMetadata*)((char*)initial_memory + i * MAX_BLOCK_SIZE);
         block->set_size(MAX_BLOCK_SIZE);
         block->set_is_free(true);
-        block->set_next(free_lists[MAX_ORDER]);
-        if (free_lists[MAX_ORDER] != nullptr) {
-            free_lists[MAX_ORDER]->set_prev(block);
+
+        // Insert the block into the free list in ascending order
+        MallocMetadata* current = free_lists[MAX_ORDER];
+        MallocMetadata* prev = nullptr;
+
+        while (current != nullptr && current < block) {
+            prev = current;
+            current = current->get_next();
         }
-        free_lists[MAX_ORDER] = block;
+
+        block->set_next(current);
+        block->set_prev(prev);
+        if (current != nullptr) {
+            current->set_prev(block);
+        }
+        if (prev != nullptr) {
+            prev->set_next(block);
+        } else {
+            free_lists[MAX_ORDER] = block;
+        }
     }
 
     // Update stats
@@ -198,7 +213,7 @@ void* scalloc(size_t num, size_t size) {
     }
 
     // Update stats
-    stats.num_used_blocks++;
+//    stats.num_used_blocks++;
 
     return ptr;
 }
@@ -269,6 +284,7 @@ MallocMetadata* tryMergeBuddyBlocks(MallocMetadata* block, size_t size, int& ord
             break;
         }
     }
+    block->set_size(total_size); // Update the size of the merged block
     return block;
 }
 
