@@ -7,6 +7,9 @@
 #include <cstdint>
 #include <sys/mman.h>
 
+#include <iostream>
+using namespace std;
+
 
 #define MAX_ORDER 10
 #define MIN_BLOCK_SIZE 128 // 128 bytes
@@ -93,9 +96,13 @@ void initialize_memory_pool() {
     is_memory_pool_initialized = true;
 }
 
-int getOrder(size_t size) {
+int getOrder(size_t size, bool include_metadata = true) {
     int order = 0;
     size_t blockSize = MIN_BLOCK_SIZE;
+
+    if (include_metadata) {
+        size += sizeof(MallocMetadata);
+    }
 
     while (order <= MAX_ORDER && blockSize < size) {
         order++;
@@ -165,14 +172,14 @@ void* smalloc(size_t size) {
         return nullptr;
     }
 
-    if (size >= 128 * 1024) {
+    if (size + sizeof(MallocMetadata) > 128 * 1024) {
         // Use mmap for large allocations
         void* ptr = mmap(nullptr, size + sizeof(MallocMetadata), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (ptr == MAP_FAILED) {
             return nullptr;
         }
         auto* metadata = (MallocMetadata*)ptr;
-        metadata->set_size(size + sizeof(MallocMetadata));
+        metadata->set_size(size);
         metadata->set_is_free(false);
         metadata->set_is_mmap(true);
         metadata->set_next(mmap_head);
@@ -211,9 +218,6 @@ void* scalloc(size_t num, size_t size) {
     if (ptr != nullptr) {
         memset(ptr, 0, total_size);
     }
-
-    // Update stats
-//    stats.num_used_blocks++;
 
     return ptr;
 }
@@ -316,7 +320,7 @@ void sfree(void* p) {
                 curr->set_next(block->get_next());
             }
         }
-        munmap(block, block->get_size());
+        munmap(block, block->get_size() + sizeof(MallocMetadata));
 
         // Update stats
         stats.num_used_blocks--;
@@ -330,7 +334,7 @@ void sfree(void* p) {
     stats.num_free_bytes += block->get_size();
     stats.num_used_blocks--;
 
-    int order = getOrder(block->get_size());
+    int order = getOrder(block->get_size(), false);
     mergeBuddyBlocks(block, order);
 
 
@@ -340,7 +344,7 @@ void sfree(void* p) {
 
 bool canAchieveBestFitBlockSizeByMerging(MallocMetadata* block, size_t target_size) {
     size_t total_size = block->get_size();
-    int order = getOrder(total_size);
+    int order = getOrder(total_size, false);
     int best_fit_order = getOrder(target_size);
 
     while (order < best_fit_order) {
@@ -366,7 +370,7 @@ bool canAchieveBestFitBlockSizeByMerging(MallocMetadata* block, size_t target_si
 
 // Handle mmaped blocks
 void* handle_mmaped_block(MallocMetadata* curr, void* oldp, size_t size) {
-    if (curr->get_size() == size) {
+    if (curr->get_size() + sizeof(MallocMetadata) == size) {
         return oldp;
     }
 
@@ -382,8 +386,8 @@ void* handle_mmaped_block(MallocMetadata* curr, void* oldp, size_t size) {
     new_metadata->set_next(mmap_head);
     mmap_head = new_metadata;
 
-    memmove((char*)new_ptr + sizeof(MallocMetadata), oldp, curr->get_size());
-    munmap(curr, curr->get_size());
+    memmove((char*)new_ptr + sizeof(MallocMetadata), oldp, curr->get_size() + sizeof(MallocMetadata));
+    munmap(curr, curr->get_size() + sizeof(MallocMetadata));
     return (char*)new_ptr + sizeof(MallocMetadata);
 }
 
@@ -398,21 +402,23 @@ void* srealloc(void* oldp, size_t size) {
 
     auto* curr = (MallocMetadata*)((char*)oldp - sizeof(MallocMetadata));
 
+    // Reuse the current block if possible
+    if (curr->get_size() >= size + sizeof(MallocMetadata)) {
+        return oldp;
+    }
+
     // Handle mmaped blocks
     if (curr->get_is_mmap()) {
         return handle_mmaped_block(curr, oldp, size);
     }
 
-    // Reuse the current block if possible
-    if (curr->get_size() >= size) {
-        return oldp;
-    }
+
 
     // Check if merging with buddy blocks can provide a large enough block
     if (canAchieveBestFitBlockSizeByMerging(curr, size)) {
         size_t original_size = curr->get_size();
         size_t total_size = original_size;
-        int order = getOrder(original_size);
+        int order = getOrder(original_size, false);
         MallocMetadata* merged_block = tryMergeBuddyBlocks(curr, size, order, total_size, true);
         merged_block->set_is_free(false);
         merged_block->set_size(total_size);
@@ -431,9 +437,6 @@ void* srealloc(void* oldp, size_t size) {
 
     memmove(new_ptr, oldp, curr->get_size());
     sfree(oldp);
-
-    // Update stats
-//    stats.num_used_blocks++;
 
     return new_ptr;
 }
@@ -466,7 +469,7 @@ size_t _num_allocated_bytes() {
     // Add the size of mmaped blocks and subtract their metadata size
     MallocMetadata* current = mmap_head;
     while (current != nullptr) {
-        allocated_bytes += current->get_size();
+        allocated_bytes += current->get_size() + sizeof(MallocMetadata);
         //TODO: strange....metadata should be included for mmaped blocks but not for the heap blocks???
         current = current->get_next();
     }
